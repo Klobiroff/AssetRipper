@@ -72,14 +72,15 @@ public sealed class GameAssetFactory : AssetFactoryBase
 		try
 		{
 			monoBehaviour.Read(ref reader);
-			SerializableStructure? structure;
 			if (type is not null && TypeTreeNodeStruct.TryMakeFromTypeTree(type.OldType, out TypeTreeNodeStruct rootNode))
 			{
-				structure = SerializableTreeType.FromRootNode(rootNode, true).CreateSerializableStructure();
-				if (structure.Type.Fields.Count > 0 && structure.Type.Fields[^1] is { Type.Name: "ManagedReferencesRegistry", Name: "references" })
+				var hasManagedReferencesRegistry = HasManagedReferencesRegistry(rootNode);
+				var structureRootNode = hasManagedReferencesRegistry ? RemoveManagedReferencesRegistry(rootNode) : rootNode;
+				var structure = SerializableTreeType.FromRootNode(structureRootNode, true).CreateSerializableStructure();
+				if (hasManagedReferencesRegistry)
 				{
-					Logger.Error(LogCategory.Import, $"MonoBehaviour has a field with the [SerializeReference] attribute, which is not currently supported.");
-					monoBehaviour.Structure = null;
+					Logger.Warning(LogCategory.Import, "MonoBehaviour has [SerializeReference] fields. Managed reference payload will be ignored, but regular structure fields will still be read.");
+					monoBehaviour.Structure = TryReadWithIgnoredTail(ref reader, monoBehaviour, structure) ? structure : null;
 				}
 				else if (structure.TryRead(ref reader, monoBehaviour))
 				{
@@ -100,6 +101,38 @@ public sealed class GameAssetFactory : AssetFactoryBase
 			LogMonoBehaviorReadException(monoBehaviour, ex);
 		}
 		return monoBehaviour;
+	}
+
+	private static bool HasManagedReferencesRegistry(TypeTreeNodeStruct rootNode)
+	{
+		var subNodes = rootNode.SubNodes;
+		return subNodes.Count > 0 && subNodes[^1].IsManagedReferencesRegistry;
+	}
+
+	private static TypeTreeNodeStruct RemoveManagedReferencesRegistry(TypeTreeNodeStruct rootNode)
+	{
+		var subNodes = rootNode.SubNodes;
+		var trimmedSubNodes = new TypeTreeNodeStruct[subNodes.Count - 1];
+		for (var i = 0; i < trimmedSubNodes.Length; i++)
+		{
+			trimmedSubNodes[i] = subNodes[i];
+		}
+
+		return new TypeTreeNodeStruct(rootNode.TypeName, rootNode.Name, rootNode.Version, rootNode.MetaFlag, trimmedSubNodes);
+	}
+
+	private static bool TryReadWithIgnoredTail(ref EndianSpanReader reader, IMonoBehaviour monoBehaviour, SerializableStructure structure)
+	{
+		try
+		{
+			structure.Read(ref reader, monoBehaviour.Collection.Version, monoBehaviour.Collection.Flags);
+			return true;
+		}
+		catch (Exception ex)
+		{
+			Logger.Error(LogCategory.Import, $"Unable to read MonoBehaviour structure with ignored [SerializeReference] payload ({ex.GetType().Name}).");
+			return false;
+		}
 	}
 
 	private static IUnityObjectBase ReadNormalObject(AssetInfo assetInfo, ReadOnlyArraySegment<byte> assetData)
