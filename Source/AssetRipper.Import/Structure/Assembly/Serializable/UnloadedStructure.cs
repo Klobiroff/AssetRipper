@@ -70,8 +70,8 @@ public sealed class UnloadedStructure : UnityAssetBase, IDeepCloneable
 		SerializableStructure? structure = MonoBehaviour.ScriptP?.GetBehaviourType(AssemblyManager, out failureReason)?.CreateSerializableStructure();
 		if (structure is not null)
 		{
-			EndianSpanReader reader = new EndianSpanReader(StructureData, MonoBehaviour.Collection.EndianType);
-			if (structure.TryRead(ref reader, MonoBehaviour))
+			var reader = new EndianSpanReader(StructureData, MonoBehaviour.Collection.EndianType);
+			if (TryReadStructure(ref reader, structure))
 			{
 				MonoBehaviour.Structure = structure;
 				return structure;
@@ -84,6 +84,20 @@ public sealed class UnloadedStructure : UnityAssetBase, IDeepCloneable
 
 		MonoBehaviour.Structure = null;
 		return null;
+	}
+
+	private bool TryReadStructure(ref EndianSpanReader reader, SerializableStructure structure)
+	{
+		try
+		{
+			structure.Read(ref reader, MonoBehaviour.Collection.Version, MonoBehaviour.Collection.Flags);
+			return true;
+		}
+		catch (Exception ex)
+		{
+			Logger.Error(LogCategory.Import, $"Unable to read MonoBehaviour structure for `{MonoBehaviour.ScriptP?.GetFullName()}` ({ex.GetType().Name}).");
+			return false;
+		}
 	}
 
 	private UnityAssetBase LoadStructureOrStatelessAsset()

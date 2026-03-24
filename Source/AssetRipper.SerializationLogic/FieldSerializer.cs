@@ -200,11 +200,17 @@ public readonly partial struct FieldSerializer
 			{
 				if (fieldDefinition.HasSerializeReferenceAttribute())
 				{
-					failureReason = $"{fieldDefinition.DeclaringType?.FullName}.{fieldDefinition.Name} uses the [SerializeReference] attribute, which is currently not supported.";
+					if (TryCreateManagedReferenceField(fieldDefinition.Name ?? string.Empty, fieldType, out Field managedReferenceField))
+					{
+						fields.Add(managedReferenceField);
+						continue;
+					}
+
+					failureReason = $"{fieldDefinition.DeclaringType?.FullName}.{fieldDefinition.Name} uses an unsupported [SerializeReference] layout.";
 					return false;
 				}
 
-				int arrayDepth = 0;
+				var arrayDepth = 0;
 				if (fieldDefinition.HasFixedBufferAttribute())
 				{
 					fieldType = fieldDefinition.GetFixedBufferElementType();
@@ -220,11 +226,11 @@ public readonly partial struct FieldSerializer
 				{
 					if (monoType.IsCyclicReference(field.Type))
 					{
-						// Infinite recursion disqualifies a field from serialization.
+						continue;
 					}
-					else if (!field.Type.IsMaxDepthKnown)
+
+					if (!field.Type.IsMaxDepthKnown)
 					{
-						// New cycle reference detected.
 						List<MonoType> cycleList = new(typeStack.Count);
 						foreach (MonoType monoTypeInStack in typeStack)
 						{
@@ -258,6 +264,38 @@ public readonly partial struct FieldSerializer
 			}
 		}
 		failureReason = null;
+		return true;
+	}
+
+	private static bool TryCreateManagedReferenceField(string fieldName, TypeSignature fieldType, out Field field)
+	{
+		var arrayDepth = 0;
+		while (true)
+		{
+			if (fieldType is CustomModifierTypeSignature customModifierType)
+			{
+				fieldType = customModifierType.BaseType;
+				continue;
+			}
+
+			if (fieldType is SzArrayTypeSignature szArrayTypeSignature)
+			{
+				fieldType = szArrayTypeSignature.BaseType;
+				arrayDepth++;
+				continue;
+			}
+
+			if (fieldType is GenericInstanceTypeSignature genericInstanceTypeSignature && genericInstanceTypeSignature.GenericType is { Namespace.Value: "System.Collections.Generic", Name.Value: "List`1" })
+			{
+				fieldType = genericInstanceTypeSignature.TypeArguments[0];
+				arrayDepth++;
+				continue;
+			}
+
+			break;
+		}
+
+		field = new Field(SerializablePrimitiveType.GetOrCreate(PrimitiveType.Long), arrayDepth, fieldName, true);
 		return true;
 	}
 
